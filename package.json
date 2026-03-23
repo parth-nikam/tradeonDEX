@@ -1,0 +1,27 @@
+{
+  "name": "dex-ai-trader",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "agent": "bun run src/agent/loop.ts",
+    "api": "bun run src/api/server.ts",
+    "dashboard": "npm run dev --prefix src/dashboard",
+    "seed": "bun run src/seed.ts",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^0.0.36",
+    "@prisma/client": "^5.14.0",
+    "ai": "^3.2.0",
+    "lighter-js-sdk": "^1.0.0",
+    "prisma": "^5.14.0",
+    "technicalindicators": "^3.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.4.5"
+  }
+}

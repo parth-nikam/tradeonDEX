@@ -1,0 +1,48 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model ModelConfig {
+  id           Int               @id @default(autoincrement())
+  name         String
+  apiModelName String            // e.g. "anthropic/claude-3.5-sonnet"
+  accountIndex Int               @default(0)
+  isActive     Boolean           @default(true)
+  createdAt    DateTime          @default(now())
+  invocations  ModelInvocation[]
+}
+
+model ModelInvocation {
+  id          Int         @id @default(autoincrement())
+  modelId     Int
+  model       ModelConfig @relation(fields: [modelId], references: [id])
+  prompt      String      @db.Text
+  response    String      @db.Text
+  totalCost   Float       @default(0)
+  timestamp   DateTime    @default(now())
+  toolCalls   ToolCall[]
+}
+
+model ToolCall {
+  id            Int             @id @default(autoincrement())
+  invocationId  Int
+  invocation    ModelInvocation @relation(fields: [invocationId], references: [id])
+  toolName      String
+  parameters    Json
+  result        Json
+  timestamp     DateTime        @default(now())
+}
+
+model PortfolioSnapshot {
+  id             Int      @id @default(autoincrement())
+  modelId        Int
+  totalValue     Float
+  availableCash  Float
+  positions      Json     // array of open positions
+  timestamp      DateTime @default(now())
+}
