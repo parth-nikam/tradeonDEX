@@ -61,7 +61,7 @@ curl -fsSL https://bun.sh/install | bash
 ### 2. Clone & install deps
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/tradeonDEX.git
+git clone https://github.com/parth-nikam/tradeonDEX.git
 cd tradeonDEX
 bun install
 ```
