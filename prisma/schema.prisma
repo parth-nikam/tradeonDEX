@@ -10,7 +10,7 @@ datasource db {
 model ModelConfig {
   id           Int               @id @default(autoincrement())
   name         String
-  apiModelName String            // e.g. "anthropic/claude-3.5-sonnet"
+  apiModelName String
   accountIndex Int               @default(0)
   isActive     Boolean           @default(true)
   createdAt    DateTime          @default(now())
@@ -40,9 +40,25 @@ model ToolCall {
 
 model PortfolioSnapshot {
   id             Int      @id @default(autoincrement())
-  modelId        Int
+  modelId        Int      @default(0)
   totalValue     Float
   availableCash  Float
-  positions      Json     // array of open positions
+  positions      Json
   timestamp      DateTime @default(now())
+}
+
+model TradeRecord {
+  id           Int      @id @default(autoincrement())
+  modelId      Int
+  symbol       String
+  side         String   // "long" | "short"
+  quantity     Float
+  leverage     Int
+  entryPrice   Float
+  exitPrice    Float?
+  pnl          Float?
+  status       String   @default("open") // "open" | "closed" | "failed"
+  openedAt     DateTime @default(now())
+  closedAt     DateTime?
+  reasoning    String?  @db.Text
 }

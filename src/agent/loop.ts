@@ -1,36 +1,64 @@
 /**
- * Main execution loop — runs every 5 minutes.
- * Deploy with PM2 using ecosystem.config.cjs
+ * Main execution loop.
+ * Single run: bun run src/agent/loop.ts
+ * Scheduled:  pm2 start ecosystem.config.cjs
  */
 
 import { prisma } from "../lib/db.ts";
 import { getCandles, getWalletBalance, getOpenPositions } from "../lib/lighter.ts";
 import { calcIndicators } from "../lib/indicators.ts";
 import { invokeModel } from "./invoke.ts";
+import { logger } from "../lib/logger.ts";
+import { config } from "../lib/config.ts";
 import type { MarketContext, PortfolioContext } from "./prompt.ts";
 
 const SYMBOLS = ["BTC", "ETH", "SOL"] as const;
 
-async function run() {
-  console.log(`[${new Date().toISOString()}] Starting agent loop...`);
-
-  // 1. Fetch market data for all symbols
-  const markets: MarketContext[] = await Promise.all(
+async function fetchMarkets(): Promise<MarketContext[]> {
+  const results = await Promise.allSettled(
     SYMBOLS.map(async (symbol) => {
-      const candles = await getCandles(symbol, "5", 50);
+      const candles = await getCandles(symbol, config.CANDLE_RESOLUTION, config.CANDLE_COUNT);
       const indicators = calcIndicators(candles);
       return { symbol, candles, indicators };
     })
   );
 
+  return results
+    .map((r, i) => {
+      if (r.status === "rejected") {
+        logger.error(`Failed to fetch market data for ${SYMBOLS[i]}`, { error: r.reason?.message });
+        return null;
+      }
+      return r.value;
+    })
+    .filter(Boolean) as MarketContext[];
+}
+
+async function run() {
+  const runStart = Date.now();
+  logger.info("Agent loop starting");
+
+  // 1. Fetch market data
+  const markets = await fetchMarkets();
+  if (markets.length === 0) {
+    logger.error("No market data available, aborting run");
+    return;
+  }
+
   // 2. Fetch portfolio state
-  const [availableCash, openPositions] = await Promise.all([
-    getWalletBalance(),
-    getOpenPositions(),
-  ]);
+  let availableCash = 0;
+  let openPositions: any[] = [];
+  try {
+    [availableCash, openPositions] = await Promise.all([
+      getWalletBalance(),
+      getOpenPositions(),
+    ]);
+  } catch (err: any) {
+    logger.warn("Could not fetch portfolio state, using defaults", { error: err?.message });
+  }
 
   const positionValue = openPositions.reduce(
-    (sum: number, p: any) => sum + parseFloat(p.notionalValue ?? 0),
+    (sum: number, p: any) => sum + parseFloat(p.notionalValue ?? p.unrealizedPnl ?? 0),
     0
   );
 
@@ -40,42 +68,70 @@ async function run() {
     openPositions,
   };
 
-  // 3. Snapshot portfolio to DB
-  await prisma.portfolioSnapshot.create({
-    data: {
-      modelId: 0, // global snapshot
-      totalValue: portfolio.totalValue,
-      availableCash: portfolio.availableCash,
-      positions: openPositions,
-    },
+  logger.info("Portfolio state", {
+    totalValue: portfolio.totalValue,
+    availableCash: portfolio.availableCash,
+    openPositions: openPositions.length,
   });
 
-  // 4. Run each active model
-  const models = await prisma.modelConfig.findMany({ where: { isActive: true } });
+  // 3. Snapshot portfolio
+  try {
+    await prisma.portfolioSnapshot.create({
+      data: {
+        modelId: 0,
+        totalValue: portfolio.totalValue,
+        availableCash: portfolio.availableCash,
+        positions: openPositions,
+      },
+    });
+  } catch (err: any) {
+    logger.warn("Could not save portfolio snapshot", { error: err?.message });
+  }
 
-  if (models.length === 0) {
-    console.warn("No active models found. Add one via DB or seed script.");
+  // 4. Run active models
+  let models: any[] = [];
+  try {
+    models = await prisma.modelConfig.findMany({ where: { isActive: true } });
+  } catch (err: any) {
+    logger.error("Could not fetch model configs from DB", { error: err?.message });
     return;
   }
 
+  if (models.length === 0) {
+    logger.warn("No active models found. Run: bun run seed");
+    return;
+  }
+
+  let totalCost = 0;
   for (const model of models) {
-    console.log(`  Running model: ${model.name} (${model.apiModelName})`);
+    logger.info(`Running model: ${model.name}`, { apiModel: model.apiModelName });
     try {
-      const { text, invocationId } = await invokeModel(model, portfolio, markets);
-      console.log(`  [${model.name}] Response: ${text.slice(0, 120)}...`);
-      console.log(`  [${model.name}] Invocation ID: ${invocationId}`);
-    } catch (err) {
-      console.error(`  [${model.name}] Error:`, err);
+      const { text, invocationId, cost } = await invokeModel(model, portfolio, markets);
+      totalCost += cost;
+      logger.info(`Model response`, {
+        model: model.name,
+        invocationId,
+        preview: text.slice(0, 150).replace(/\n/g, " "),
+      });
+    } catch (err: any) {
+      logger.error(`Model invocation failed`, { model: model.name, error: err?.message });
     }
   }
 
-  console.log(`[${new Date().toISOString()}] Loop complete.\n`);
+  const elapsed = ((Date.now() - runStart) / 1000).toFixed(1);
+  logger.info("Agent loop complete", { elapsed: `${elapsed}s`, totalCost: `$${totalCost.toFixed(6)}` });
 }
 
-// Run immediately, then on interval if LOOP_INTERVAL_MS is set
-await run();
+// Run immediately
+await run().catch((err) => {
+  logger.error("Fatal loop error", { error: err?.message, stack: err?.stack });
+  process.exit(1);
+});
 
-const intervalMs = parseInt(process.env.LOOP_INTERVAL_MS ?? "0");
-if (intervalMs > 0) {
-  setInterval(run, intervalMs);
+// Optional: keep running on interval (set LOOP_INTERVAL_MS env var)
+if (config.LOOP_INTERVAL_MS > 0) {
+  logger.info(`Loop interval set to ${config.LOOP_INTERVAL_MS}ms`);
+  setInterval(() => {
+    run().catch((err) => logger.error("Loop iteration error", { error: err?.message }));
+  }, config.LOOP_INTERVAL_MS);
 }
