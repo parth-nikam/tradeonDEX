@@ -1,6 +1,6 @@
 /**
  * Main execution loop — runs every 5 minutes.
- * Deploy with: pm2 start "bun run src/agent/loop.ts" --name dex-trader --cron "*/5 * * * *"
+ * Deploy with PM2 using ecosystem.config.cjs
  */
 
 import { prisma } from "../lib/db.ts";
