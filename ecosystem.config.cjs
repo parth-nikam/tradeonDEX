@@ -8,9 +8,11 @@ module.exports = {
     {
       name: "dex-trader-loop",
       script: "src/agent/loop.ts",
-      interpreter: "bun",
+      interpreter: "/home/ubuntu/.bun/bin/bun",
+      interpreter_args: "run",
       cron_restart: "*/5 * * * *",
       autorestart: false,
+      exec_mode: "fork",
       env: { NODE_ENV: "production", LOOP_INTERVAL_MS: "0" },
     },
 
@@ -20,13 +22,15 @@ module.exports = {
     {
       name: "dex-trader-hf",
       script: "src/agent/loop.ts",
-      interpreter: "bun",
+      interpreter: "/home/ubuntu/.bun/bin/bun",
+      interpreter_args: "run",
       autorestart: true,
+      exec_mode: "fork",
       max_restarts: 10,
       restart_delay: 5000,
       env: {
         NODE_ENV: "production",
-        LOOP_INTERVAL_MS: "60000",   // 1 minute
+        LOOP_INTERVAL_MS: "60000",
         CANDLE_RESOLUTION: "1m",
         CANDLE_COUNT: "100",
       },
@@ -36,9 +40,11 @@ module.exports = {
     {
       name: "dex-trader-api",
       script: "src/api/server.ts",
-      interpreter: "bun",
+      interpreter: "/home/ubuntu/.bun/bin/bun",
+      interpreter_args: "run",
       watch: false,
       autorestart: true,
+      exec_mode: "fork",
       max_restarts: 20,
       env: { NODE_ENV: "production", API_PORT: "3001" },
     },
