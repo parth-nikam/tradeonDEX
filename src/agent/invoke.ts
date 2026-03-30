@@ -11,7 +11,7 @@ import { SYSTEM_PROMPT, buildUserPrompt, type MarketContext, type PortfolioConte
 import { logger } from "../lib/logger.ts";
 import type { ModelConfig } from "@prisma/client";
 
-const region = process.env.AWS_REGION ?? "ap-south-1";
+const region = process.env.AWS_BEDROCK_REGION ?? "us-east-1";
 
 // Use EC2 instance metadata credentials (IAM role) — no keys needed
 const bedrock = createAmazonBedrock({

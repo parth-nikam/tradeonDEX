@@ -7,20 +7,14 @@ import { prisma } from "./lib/db.ts";
 await prisma.modelConfig.createMany({
   data: [
     {
-      name: "Claude 3.5 Sonnet APAC",
-      apiModelName: "apac.anthropic.claude-3-5-sonnet-20240620-v1:0",
+      name: "Claude 3.5 Sonnet v2",
+      apiModelName: "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
       accountIndex: 0,
       isActive: true,
     },
     {
-      name: "Claude 3.5 Sonnet v2 APAC",
-      apiModelName: "apac.anthropic.claude-3-5-sonnet-20241022-v2:0",
-      accountIndex: 0,
-      isActive: false,
-    },
-    {
-      name: "Claude 3 Haiku APAC",
-      apiModelName: "apac.anthropic.claude-3-haiku-20240307-v1:0",
+      name: "Claude 3 Haiku",
+      apiModelName: "anthropic.claude-3-haiku-20240307-v1:0",
       accountIndex: 0,
       isActive: false,
     },
