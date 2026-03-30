@@ -1,4 +1,8 @@
-import { createOpenAI } from "@ai-sdk/openai";
+/**
+ * LLM invocation via AWS Bedrock (Claude).
+ * No external API key needed — uses EC2 IAM role with bedrock:InvokeModel.
+ */
+import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { generateText } from "ai";
 import { prisma } from "../lib/db.ts";
 import { buildTools } from "./tools.ts";
@@ -6,27 +10,21 @@ import { SYSTEM_PROMPT, buildUserPrompt, type MarketContext, type PortfolioConte
 import { logger } from "../lib/logger.ts";
 import type { ModelConfig } from "@prisma/client";
 
-if (!process.env.OPENROUTER_API_KEY) {
-  logger.warn("OPENROUTER_API_KEY is not set — LLM calls will fail");
-}
-
-const openrouter = createOpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_API_KEY ?? "",
+// Bedrock client — uses IAM role credentials automatically on EC2
+const bedrock = createAmazonBedrock({
+  region: process.env.AWS_REGION ?? "ap-south-1",
 });
 
-// Cost per million tokens (input / output) in USD
+// Cost per million tokens (input / output) in USD — Bedrock on-demand pricing
 const MODEL_COSTS: Record<string, [number, number]> = {
-  "anthropic/claude-3.5-sonnet":   [3,    15],
-  "anthropic/claude-3-haiku":      [0.25,  1.25],
-  "deepseek/deepseek-r1":          [0.55,  2.19],
-  "qwen/qwen-2.5-72b-instruct":    [0.35,  0.40],
-  "openai/gpt-4o":                 [5,    15],
-  "openai/gpt-4o-mini":            [0.15,  0.60],
+  "anthropic.claude-3-5-sonnet-20241022-v2:0": [3.0,  15.0],
+  "anthropic.claude-3-7-sonnet-20250219-v1:0": [3.0,  15.0],
+  "anthropic.claude-3-haiku-20240307-v1:0":    [0.25,  1.25],
+  "anthropic.claude-sonnet-4-20250514-v1:0":   [3.0,  15.0],
 };
 
-function estimateCost(modelName: string, inputTokens: number, outputTokens: number): number {
-  const [inputRate, outputRate] = MODEL_COSTS[modelName] ?? [3, 15];
+function estimateCost(modelId: string, inputTokens: number, outputTokens: number): number {
+  const [inputRate, outputRate] = MODEL_COSTS[modelId] ?? [3.0, 15.0];
   return (inputTokens * inputRate + outputTokens * outputRate) / 1_000_000;
 }
 
@@ -58,7 +56,7 @@ export async function invokeModel(
 
   const { text, usage } = await withRetry(() =>
     generateText({
-      model: openrouter(config.apiModelName),
+      model: bedrock(config.apiModelName),
       system: SYSTEM_PROMPT,
       prompt: userPrompt,
       tools,

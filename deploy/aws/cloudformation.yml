@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: DEX AI Trader — EC2 + Security Group + Elastic IP
+Description: DEX AI Trader - EC2 + RDS PostgreSQL + Security Groups + Elastic IP
 
 Parameters:
   KeyPairName:
@@ -10,27 +10,93 @@ Parameters:
     Type: String
     Default: t3.small
     AllowedValues: [t3.micro, t3.small, t3.medium, c5.large, c5.xlarge]
-    Description: >
-      t3.small  — dev/testing ($0.02/hr)
-      c5.large  — production, faster LLM throughput ($0.085/hr)
-      c5.xlarge — high-frequency trading ($0.17/hr)
+    Description: EC2 instance type
 
   AMI:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
     Description: Ubuntu 22.04 LTS (auto-resolved per region)
 
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: RDS master password (min 8 chars)
+    Default: TraderPass2024!
+
 Resources:
-  # ── Security Group ──────────────────────────────────────────────────────────
-  TraderSecurityGroup:
+  # ── VPC / Networking ─────────────────────────────────────────────────────────
+  TraderVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: dex-trader-vpc
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref TraderVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref TraderVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref TraderVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TraderVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Subnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  Subnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ── Security Groups ───────────────────────────────────────────────────────────
+  EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: DEX Trader — allow HTTP, HTTPS, SSH
+      GroupDescription: DEX Trader EC2 - HTTP HTTPS SSH API
+      VpcId: !Ref TraderVPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 0.0.0.0/0          # Restrict to your IP in production
+          CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
@@ -42,17 +108,92 @@ Resources:
         - IpProtocol: tcp
           FromPort: 3001
           ToPort: 3001
-          CidrIp: 0.0.0.0/0          # Direct API access (remove if using Nginx proxy only)
+          CidrIp: 0.0.0.0/0
 
-  # ── EC2 Instance ────────────────────────────────────────────────────────────
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DEX Trader RDS - Postgres from EC2 only
+      VpcId: !Ref TraderVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+
+  # ── RDS PostgreSQL ────────────────────────────────────────────────────────────
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: DEX Trader DB subnet group
+      SubnetIds:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+
+  TraderDB:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: dex-trader-db
+      DBInstanceClass: db.t3.micro
+      Engine: postgres
+      EngineVersion: "16.13"
+      MasterUsername: trader
+      MasterUserPassword: !Ref DBPassword
+      DBName: traderdb
+      AllocatedStorage: 20
+      StorageType: gp2
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      BackupRetentionPeriod: 0
+      DeletionProtection: false
+
+  # ── IAM Role for EC2 (Bedrock access) ────────────────────────────────────────
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dex-trader-ec2-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+
+  # ── EC2 Instance ──────────────────────────────────────────────────────────────
   TraderInstance:
     Type: AWS::EC2::Instance
+    DependsOn: TraderDB
     Properties:
       InstanceType: !Ref InstanceType
       ImageId: !Ref AMI
       KeyName: !Ref KeyPairName
-      SecurityGroups:
-        - !Ref TraderSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnet1
+          GroupSet:
+            - !Ref EC2SecurityGroup
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
@@ -61,13 +202,8 @@ Resources:
       Tags:
         - Key: Name
           Value: dex-ai-trader
-      UserData:
-        Fn::Base64: |
-          #!/bin/bash
-          apt-get update -y
-          # Signal that instance is ready — actual setup done via setup.sh after SSH
+      UserData: !Base64 "#!/bin/bash\napt-get update -y\n"
 
-  # ── Elastic IP ──────────────────────────────────────────────────────────────
   TraderEIP:
     Type: AWS::EC2::EIP
     Properties:
@@ -75,17 +211,25 @@ Resources:
 
 Outputs:
   PublicIP:
-    Description: Elastic IP — use this for DNS and SSH
+    Description: Elastic IP
     Value: !Ref TraderEIP
 
   DashboardURL:
-    Description: Dashboard URL (after Nginx setup)
+    Description: Dashboard URL
     Value: !Sub "http://${TraderEIP}"
 
   APIURL:
-    Description: Direct API URL
+    Description: API URL
     Value: !Sub "http://${TraderEIP}:3001"
 
   SSHCommand:
-    Description: SSH into your instance
+    Description: SSH command
     Value: !Sub "ssh -i ${KeyPairName}.pem ubuntu@${TraderEIP}"
+
+  DBEndpoint:
+    Description: RDS PostgreSQL endpoint
+    Value: !GetAtt TraderDB.Endpoint.Address
+
+  DatabaseURL:
+    Description: Full DATABASE_URL for .env
+    Value: !Sub "postgresql://trader:${DBPassword}@${TraderDB.Endpoint.Address}:5432/traderdb"
