@@ -7,9 +7,8 @@ module.exports = {
     // ── Standard loop: PM2 cron every 5 minutes ──────────────────────────────
     {
       name: "dex-trader-loop",
-      script: "src/agent/loop.ts",
-      interpreter: "/home/ubuntu/.bun/bin/bun",
-      interpreter_args: "run",
+      script: "scripts/run-loop.sh",
+      interpreter: "bash",
       cron_restart: "*/5 * * * *",
       autorestart: false,
       exec_mode: "fork",
@@ -17,13 +16,10 @@ module.exports = {
     },
 
     // ── High-frequency loop: built-in interval (1 min) ────────────────────────
-    // Uses LOOP_INTERVAL_MS so no PM2 cron overhead — tighter execution timing.
-    // Switch CANDLE_RESOLUTION to 1m in .env for best results.
     {
       name: "dex-trader-hf",
-      script: "src/agent/loop.ts",
-      interpreter: "/home/ubuntu/.bun/bin/bun",
-      interpreter_args: "run",
+      script: "scripts/run-loop.sh",
+      interpreter: "bash",
       autorestart: true,
       exec_mode: "fork",
       max_restarts: 10,
@@ -39,9 +35,8 @@ module.exports = {
     // ── API server ────────────────────────────────────────────────────────────
     {
       name: "dex-trader-api",
-      script: "src/api/server.ts",
-      interpreter: "/home/ubuntu/.bun/bin/bun",
-      interpreter_args: "run",
+      script: "scripts/run-api.sh",
+      interpreter: "bash",
       watch: false,
       autorestart: true,
       exec_mode: "fork",
