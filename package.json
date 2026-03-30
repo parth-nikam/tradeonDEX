@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.83",
+    "@aws-sdk/credential-providers": "^3.750.0",
     "@prisma/client": "^5.14.0",
     "ai": "^6.0.0",
     "lighter-js-sdk": "^1.0.0",

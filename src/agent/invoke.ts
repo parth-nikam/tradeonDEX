@@ -1,8 +1,9 @@
 /**
  * LLM invocation via AWS Bedrock (Claude).
- * No external API key needed — uses EC2 IAM role with bedrock:InvokeModel.
+ * Uses EC2 IAM role credentials automatically via the instance metadata service.
  */
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
+import { fromInstanceMetadata } from "@aws-sdk/credential-providers";
 import { generateText } from "ai";
 import { prisma } from "../lib/db.ts";
 import { buildTools } from "./tools.ts";
@@ -10,9 +11,12 @@ import { SYSTEM_PROMPT, buildUserPrompt, type MarketContext, type PortfolioConte
 import { logger } from "../lib/logger.ts";
 import type { ModelConfig } from "@prisma/client";
 
-// Bedrock client — uses IAM role credentials automatically on EC2
+const region = process.env.AWS_REGION ?? "ap-south-1";
+
+// Use EC2 instance metadata credentials (IAM role) — no keys needed
 const bedrock = createAmazonBedrock({
-  region: process.env.AWS_REGION ?? "ap-south-1",
+  region,
+  credentialProvider: fromInstanceMetadata({ timeout: 5000, maxRetries: 3 }),
 });
 
 // Cost per million tokens (input / output) in USD — Bedrock on-demand pricing
