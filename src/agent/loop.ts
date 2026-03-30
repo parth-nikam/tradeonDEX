@@ -74,11 +74,10 @@ async function run() {
     openPositions: openPositions.length,
   });
 
-  // 3. Snapshot portfolio (global snapshot)
+  // 3. Snapshot portfolio
   try {
     await prisma.portfolioSnapshot.create({
       data: {
-        modelId: 0, // placeholder — remove after running db:push + prisma generate
         totalValue: portfolio.totalValue,
         availableCash: portfolio.availableCash,
         positions: openPositions,
