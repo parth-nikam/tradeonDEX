@@ -1,16 +1,16 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { placeOrder, closeAllPositions, getOpenPositions, type Symbol } from "../lib/lighter.ts";
+import { placeOrder, closeAllPositions, getOpenPositions, getBestPrices, type Symbol } from "../lib/lighter.ts";
 import { prisma } from "../lib/db.ts";
 import { logger } from "../lib/logger.ts";
 import { config } from "../lib/config.ts";
 
-export function buildTools(invocationId: number) {
+export function buildTools(invocationId: number, modelId: number) {
   return {
     createPosition: tool({
       description: `Open a new perpetual futures position on the Lighter DEX.
 IMPORTANT: Call closeAllPositions first if any position is already open.
-Budget limit: $${config.TRADING_BUDGET_USD}. Max leverage: ${config.MAX_LEVERAGE}x.`,
+Budget limit: ${config.TRADING_BUDGET_USD}. Max leverage: ${config.MAX_LEVERAGE}x.`,
       parameters: z.object({
         symbol: z.enum(["BTC", "ETH", "SOL"]).describe("Trading pair"),
         side: z.enum(["long", "short"]).describe("Direction"),
@@ -28,8 +28,29 @@ Budget limit: $${config.TRADING_BUDGET_USD}. Max leverage: ${config.MAX_LEVERAGE
           return { error: msg };
         }
 
-        logger.info("Opening position", { symbol, side, quantity, leverage, reasoning });
+        // Guard: validate notional value against budget
+        const { bid, ask } = await getBestPrices(symbol as Symbol);
+        const entryPrice = (bid + ask) / 2;
+        const notional = quantity * entryPrice;
+        if (notional > config.TRADING_BUDGET_USD) {
+          const msg = `Notional value $${notional.toFixed(2)} exceeds budget $${config.TRADING_BUDGET_USD}`;
+          logger.warn(msg);
+          await logToolCall(invocationId, "createPosition", { symbol, side, quantity, leverage, reasoning }, { error: msg });
+          return { error: msg };
+        }
+
+        logger.info("Opening position", { symbol, side, quantity, leverage, reasoning, entryPrice });
         const result = await placeOrder({ symbol: symbol as Symbol, side, quantity, leverage });
+
+        // Record trade
+        try {
+          await (prisma as any).tradeRecord.create({
+            data: { modelId, symbol, side, quantity, leverage, entryPrice, reasoning, status: "open" },
+          });
+        } catch (err: any) {
+          logger.warn("Could not save trade record", { error: err?.message });
+        }
+
         await logToolCall(invocationId, "createPosition", { symbol, side, quantity, leverage, reasoning }, result);
         return result;
       },
@@ -42,7 +63,34 @@ Budget limit: $${config.TRADING_BUDGET_USD}. Max leverage: ${config.MAX_LEVERAGE
       }),
       execute: async ({ reasoning }) => {
         logger.info("Closing all positions", { reasoning });
+
+        // Capture exit prices before closing
+        const openPositions = await getOpenPositions();
         await closeAllPositions();
+
+        // Update open trade records with exit info
+        for (const pos of openPositions) {
+          try {
+            const { bid, ask } = await getBestPrices(pos.symbol ?? pos.marketIndex);
+            const exitPrice = (bid + ask) / 2;
+            const openTrade = await (prisma as any).tradeRecord.findFirst({
+              where: { modelId, status: "open" },
+              orderBy: { openedAt: "desc" },
+            });
+            if (openTrade) {
+              const pnl = openTrade.side === "long"
+                ? (exitPrice - openTrade.entryPrice) * openTrade.quantity * openTrade.leverage
+                : (openTrade.entryPrice - exitPrice) * openTrade.quantity * openTrade.leverage;
+              await (prisma as any).tradeRecord.update({
+                where: { id: openTrade.id },
+                data: { exitPrice, pnl, status: "closed", closedAt: new Date() },
+              });
+            }
+          } catch (err: any) {
+            logger.warn("Could not update trade record on close", { error: err?.message });
+          }
+        }
+
         const result = { success: true, message: "All positions closed.", reasoning };
         await logToolCall(invocationId, "closeAllPositions", { reasoning }, result);
         return result;

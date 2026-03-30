@@ -3,6 +3,7 @@
  * API docs: https://mainnet.zklighter.elliot.ai/api/v1/
  */
 import * as sdk from "../../node_modules/lighter-js-sdk/dist/generated/index.js";
+import { logger } from "./logger.ts";
 
 // Real market IDs from /api/v1/orderBookDetails
 export const MARKET_INDEX: Record<string, number> = {
@@ -34,7 +35,7 @@ function getConfig() {
 export async function getWalletBalance(): Promise<number> {
   const address = process.env.LIGHTER_WALLET_ADDRESS;
   if (!address) {
-    console.warn("[lighter] LIGHTER_WALLET_ADDRESS not set, returning 0 balance");
+    logger.warn("[lighter] LIGHTER_WALLET_ADDRESS not set, returning 0 balance");
     return 0;
   }
   const api = new (sdk as any).AccountApi(getConfig());
@@ -83,7 +84,7 @@ export async function getCandles(
     }));
   } catch (err: any) {
     // If 403 (no auth), fall back to synthetic candles from order book
-    console.warn(`[lighter] Candlestick fetch failed (${err?.code ?? err?.message}), using order book price fallback`);
+    logger.warn(`[lighter] Candlestick fetch failed (${err?.code ?? err?.message}), using order book price fallback — indicators will be unreliable`);
     return getCandlesFallback(symbol, countBack);
   }
 }
@@ -109,7 +110,8 @@ async function getCandlesFallback(symbol: Symbol, count: number): Promise<Candle
 /**
  * Get best bid/ask from the public orderBookDetails endpoint.
  */
-async function getBestPrices(marketId: number): Promise<{ bid: number; ask: number }> {
+export async function getBestPrices(marketIdOrSymbol: number | string): Promise<{ bid: number; ask: number }> {
+  const marketId = typeof marketIdOrSymbol === "string" ? MARKET_INDEX[marketIdOrSymbol] ?? 0 : marketIdOrSymbol;
   // Use the public REST endpoint directly — no auth needed
   const res = await fetch(`${process.env.LIGHTER_API_URL ?? "https://mainnet.zklighter.elliot.ai"}/api/v1/orderBookDetails`);
   const data = await res.json() as any;
@@ -146,7 +148,7 @@ export async function placeOrder(params: {
 
   // TODO: Replace with signed transaction via Lighter signer module
   // when LIGHTER_PRIVATE_KEY is configured.
-  console.log(
+  logger.info(
     `[lighter] Would place ${params.side} ${params.quantity} ${params.symbol} @ ${obnoxiousPrice} (${params.leverage}x)`
   );
 
@@ -176,7 +178,7 @@ export async function closeAllPositions(): Promise<void> {
         ? (mid * 0.95).toFixed(2)
         : (mid * 1.05).toFixed(2);
 
-    console.log(
+    logger.info(
       `[lighter] Would close ${pos.side} position on ${symbol} @ ${price}`
     );
     // TODO: signed transaction

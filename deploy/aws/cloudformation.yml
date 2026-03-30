@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: DEX AI Trader — EC2 + Security Group + Elastic IP
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair for SSH access
+
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.micro, t3.small, t3.medium, c5.large, c5.xlarge]
+    Description: >
+      t3.small  — dev/testing ($0.02/hr)
+      c5.large  — production, faster LLM throughput ($0.085/hr)
+      c5.xlarge — high-frequency trading ($0.17/hr)
+
+  AMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+    Description: Ubuntu 22.04 LTS (auto-resolved per region)
+
+Resources:
+  # ── Security Group ──────────────────────────────────────────────────────────
+  TraderSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DEX Trader — allow HTTP, HTTPS, SSH
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0          # Restrict to your IP in production
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3001
+          ToPort: 3001
+          CidrIp: 0.0.0.0/0          # Direct API access (remove if using Nginx proxy only)
+
+  # ── EC2 Instance ────────────────────────────────────────────────────────────
+  TraderInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AMI
+      KeyName: !Ref KeyPairName
+      SecurityGroups:
+        - !Ref TraderSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: dex-ai-trader
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          apt-get update -y
+          # Signal that instance is ready — actual setup done via setup.sh after SSH
+
+  # ── Elastic IP ──────────────────────────────────────────────────────────────
+  TraderEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref TraderInstance
+
+Outputs:
+  PublicIP:
+    Description: Elastic IP — use this for DNS and SSH
+    Value: !Ref TraderEIP
+
+  DashboardURL:
+    Description: Dashboard URL (after Nginx setup)
+    Value: !Sub "http://${TraderEIP}"
+
+  APIURL:
+    Description: Direct API URL
+    Value: !Sub "http://${TraderEIP}:3001"
+
+  SSHCommand:
+    Description: SSH into your instance
+    Value: !Sub "ssh -i ${KeyPairName}.pem ubuntu@${TraderEIP}"

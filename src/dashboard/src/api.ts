@@ -14,6 +14,8 @@ export const api = {
     get<Invocation[]>("/invocations", { limit: String(limit), ...(modelId ? { modelId: String(modelId) } : {}) }),
   models: () => get<ModelStat[]>("/models"),
   stats: () => get<Stats>("/stats"),
+  trades: (limit = 100, status?: string) =>
+    get<TradeRecord[]>("/trades", { limit: String(limit), ...(status ? { status } : {}) }),
 };
 
 export interface Snapshot {
@@ -55,4 +57,24 @@ export interface Stats {
   totalCost: number;
   latestPortfolioValue: number;
   toolBreakdown: { toolName: string; _count: { toolName: number } }[];
+  totalPnl: number;
+  winRate: number;
+  totalTrades: number;
+  winningTrades: number;
+}
+
+export interface TradeRecord {
+  id: number;
+  modelId: number;
+  symbol: string;
+  side: string;
+  quantity: number;
+  leverage: number;
+  entryPrice: number;
+  exitPrice: number | null;
+  pnl: number | null;
+  status: string;
+  openedAt: string;
+  closedAt: string | null;
+  reasoning: string | null;
 }

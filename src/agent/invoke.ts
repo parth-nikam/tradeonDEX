@@ -6,6 +6,10 @@ import { SYSTEM_PROMPT, buildUserPrompt, type MarketContext, type PortfolioConte
 import { logger } from "../lib/logger.ts";
 import type { ModelConfig } from "@prisma/client";
 
+if (!process.env.OPENROUTER_API_KEY) {
+  logger.warn("OPENROUTER_API_KEY is not set — LLM calls will fail");
+}
+
 const openrouter = createOpenAI({
   baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY ?? "",
@@ -50,7 +54,7 @@ export async function invokeModel(
     data: { modelId: config.id, prompt: userPrompt, response: "", totalCost: 0 },
   });
 
-  const tools = buildTools(invocation.id);
+  const tools = buildTools(invocation.id, config.id);
 
   const { text, usage } = await withRetry(() =>
     generateText({

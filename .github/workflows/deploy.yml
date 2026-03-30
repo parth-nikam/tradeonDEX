@@ -1,0 +1,49 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node (dashboard build)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install backend deps
+        run: bun install
+
+      - name: Install dashboard deps
+        run: npm install --prefix src/dashboard
+
+      - name: Build dashboard
+        run: npm run build --prefix src/dashboard
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/ubuntu/tradeonDEX
+            git pull origin main
+            bun install
+            npm install --prefix src/dashboard
+            VITE_API_URL=${{ secrets.VITE_API_URL }} npm run build --prefix src/dashboard
+            bun run db:push
+            pm2 reload ecosystem.config.cjs --update-env
+            sudo systemctl reload nginx
+            echo "Deploy complete at $(date)"

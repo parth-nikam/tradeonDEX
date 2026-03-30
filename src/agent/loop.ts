@@ -74,11 +74,11 @@ async function run() {
     openPositions: openPositions.length,
   });
 
-  // 3. Snapshot portfolio
+  // 3. Snapshot portfolio (global snapshot)
   try {
     await prisma.portfolioSnapshot.create({
       data: {
-        modelId: 0,
+        modelId: 0, // placeholder — remove after running db:push + prisma generate
         totalValue: portfolio.totalValue,
         availableCash: portfolio.availableCash,
         positions: openPositions,
@@ -119,8 +119,17 @@ async function run() {
   }
 
   const elapsed = ((Date.now() - runStart) / 1000).toFixed(1);
-  logger.info("Agent loop complete", { elapsed: `${elapsed}s`, totalCost: `$${totalCost.toFixed(6)}` });
+  logger.info("Agent loop complete", { elapsed: `${elapsed}s`, totalCost: `${totalCost.toFixed(6)}` });
 }
+
+// Graceful shutdown
+async function shutdown(signal: string) {
+  logger.info(`Received ${signal}, shutting down gracefully`);
+  await prisma.$disconnect();
+  process.exit(0);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT",  () => shutdown("SIGINT"));
 
 // Run immediately
 await run().catch((err) => {

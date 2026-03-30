@@ -49,11 +49,8 @@ Bun.serve({
       // GET /models
       if (url.pathname === "/models") {
         const models = await prisma.modelConfig.findMany({
-          include: {
-            _count: { select: { invocations: true } },
-          },
+          include: { _count: { select: { invocations: true } } },
         });
-        // Attach total cost per model
         const withCost = await Promise.all(
           models.map(async (m) => {
             const agg = await prisma.modelInvocation.aggregate({
@@ -66,13 +63,26 @@ Bun.serve({
         return json(withCost);
       }
 
+      // GET /trades?limit=100&status=closed
+      if (url.pathname === "/trades") {
+        const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "100"), 500);
+        const status = url.searchParams.get("status");
+        const data = await (prisma as any).tradeRecord.findMany({
+          where: status ? { status } : undefined,
+          orderBy: { openedAt: "desc" },
+          take: limit,
+        });
+        return json(data);
+      }
+
       // GET /stats
       if (url.pathname === "/stats") {
-        const [totalInvocations, totalToolCalls, costAgg, latestSnapshot] = await Promise.all([
+        const [totalInvocations, totalToolCalls, costAgg, latestSnapshot, tradeStats] = await Promise.all([
           prisma.modelInvocation.count(),
           prisma.toolCall.count(),
           prisma.modelInvocation.aggregate({ _sum: { totalCost: true } }),
           prisma.portfolioSnapshot.findFirst({ orderBy: { timestamp: "desc" } }),
+          (prisma as any).tradeRecord.findMany({ where: { status: "closed" }, select: { pnl: true, side: true } }) as Promise<{ pnl: number | null; side: string }[]>,
         ]);
 
         const toolBreakdown = await prisma.toolCall.groupBy({
@@ -80,12 +90,21 @@ Bun.serve({
           _count: { toolName: true },
         });
 
+        const closedTrades = (tradeStats as { pnl: number | null; side: string }[]).filter((t) => t.pnl !== null);
+        const totalPnl = closedTrades.reduce((s: number, t: { pnl: number | null }) => s + (t.pnl ?? 0), 0);
+        const winningTrades = closedTrades.filter((t: { pnl: number | null }) => (t.pnl ?? 0) > 0);
+        const winRate = closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0;
+
         return json({
           totalInvocations,
           totalToolCalls,
           totalCost: costAgg._sum.totalCost ?? 0,
           latestPortfolioValue: latestSnapshot?.totalValue ?? 0,
           toolBreakdown,
+          totalPnl,
+          winRate,
+          totalTrades: closedTrades.length,
+          winningTrades: winningTrades.length,
         });
       }
 

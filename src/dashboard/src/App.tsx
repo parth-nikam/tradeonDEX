@@ -2,14 +2,15 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AreaChart, Area, BarChart, Bar, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from "recharts";
 import {
   Activity, TrendingUp, DollarSign, Zap,
   Bot, BarChart2, Settings, RefreshCw, ChevronRight,
-  ArrowUpRight, ArrowDownRight, Minus, Clock, Cpu,
+  ArrowUpRight, ArrowDownRight, Minus, Clock,
+  Target, AlertTriangle, Trophy,
 } from "lucide-react";
-import { api, type Snapshot, type Invocation, type ModelStat, type Stats } from "./api";
+import { api, type Snapshot, type Invocation, type ModelStat, type Stats, type TradeRecord } from "./api";
 import { LiveDot } from "./components/LiveDot";
 import { Sparkline } from "./components/Sparkline";
 
@@ -41,7 +42,7 @@ function CustomTooltip({ active, payload, label }: any) {
         <div key={p.name} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 2 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: p.color, flexShrink: 0 }} />
           <span style={{ color: "var(--muted)" }}>{p.name}:</span>
-          <span style={{ color: "#fff", fontWeight: 600 }}>{typeof p.value === "number" ? fmt.usd(p.value) : p.value}</span>
+          <span style={{ color: "#fff", fontWeight: 600 }}>{typeof p.value === "number" ? p.value.toFixed(4) : p.value}</span>
         </div>
       ))}
     </div>
@@ -67,7 +68,6 @@ function KPICard({ label, value, sub, color = "var(--blue)", icon, trend, sparkD
       whileHover={{ borderColor: color, boxShadow: `0 0 24px ${color}22` }}
       transition={{ duration: 0.2 }}
     >
-      {/* Subtle glow top-right */}
       <div style={{
         position: "absolute", top: -20, right: -20, width: 80, height: 80,
         borderRadius: "50%", background: color, opacity: 0.06, filter: "blur(20px)",
@@ -102,15 +102,36 @@ function KPICard({ label, value, sub, color = "var(--blue)", icon, trend, sparkD
   );
 }
 
+// ─── Error Banner ─────────────────────────────────────────────────────────────
+
+function ErrorBanner({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div style={{
+      background: "var(--red)18", border: "1px solid var(--red)44", borderRadius: 10,
+      padding: "0.875rem 1.25rem", display: "flex", alignItems: "center", gap: 12,
+    }}>
+      <AlertTriangle size={16} color="var(--red)" />
+      <span style={{ fontSize: 13, color: "var(--red)", flex: 1 }}>
+        Could not connect to API server. Make sure <code style={{ fontFamily: "monospace", background: "var(--bg3)", padding: "1px 5px", borderRadius: 4 }}>bun run api</code> is running.
+      </span>
+      <button onClick={onRetry} style={{
+        background: "var(--red)22", border: "1px solid var(--red)44", borderRadius: 6,
+        color: "var(--red)", cursor: "pointer", fontSize: 12, padding: "4px 10px",
+      }}>Retry</button>
+    </div>
+  );
+}
+
 // ─── Sidebar Nav ──────────────────────────────────────────────────────────────
 
-type Tab = "overview" | "trades" | "models" | "settings";
+type Tab = "overview" | "pnl" | "trades" | "models" | "settings";
 
 const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "overview", label: "Overview", icon: <BarChart2 size={16} /> },
-  { id: "trades",   label: "Trades",   icon: <Activity size={16} /> },
-  { id: "models",   label: "Models",   icon: <Bot size={16} /> },
-  { id: "settings", label: "Settings", icon: <Settings size={16} /> },
+  { id: "overview", label: "Overview",  icon: <BarChart2 size={16} /> },
+  { id: "pnl",      label: "P&L",       icon: <Target size={16} /> },
+  { id: "trades",   label: "Trades",    icon: <Activity size={16} /> },
+  { id: "models",   label: "Models",    icon: <Bot size={16} /> },
+  { id: "settings", label: "Settings",  icon: <Settings size={16} /> },
 ];
 
 function Sidebar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
@@ -120,7 +141,6 @@ function Sidebar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void
       borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column",
       padding: "1.5rem 0.75rem", gap: 4,
     }}>
-      {/* Logo */}
       <div style={{ padding: "0 0.5rem 1.5rem", display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{
           width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg, var(--blue), var(--purple))",
@@ -154,7 +174,6 @@ function Sidebar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void
         </motion.button>
       ))}
 
-      {/* Bottom status */}
       <div style={{ marginTop: "auto", padding: "0.75rem 0.5rem", borderTop: "1px solid var(--border)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--muted)" }}>
           <LiveDot />
@@ -183,6 +202,7 @@ function OverviewTab({ snapshots, stats, invocations }: {
   }));
 
   const recentTrades = invocations.filter((i) => i.toolCalls?.length > 0).slice(0, 5);
+  const openPositions = latest?.positions ?? [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
@@ -191,13 +211,46 @@ function OverviewTab({ snapshots, stats, invocations }: {
         <KPICard label="Portfolio Value" value={latest ? fmt.usd(latest.totalValue) : "—"}
           icon={<DollarSign size={16} />} color="var(--green)" sparkData={sparkValues}
           trend={pnlPct} sub={`${pnl >= 0 ? "+" : ""}${fmt.usd(pnl)} all time`} />
-        <KPICard label="Available Cash" value={latest ? fmt.usd(latest.availableCash) : "—"}
-          icon={<TrendingUp size={16} />} color="var(--blue)" />
-        <KPICard label="Total Invocations" value={String(stats?.totalInvocations ?? 0)}
-          sub={`${stats?.totalToolCalls ?? 0} tool calls`} icon={<Cpu size={16} />} color="var(--purple)" />
+        <KPICard label="Total P&L" value={stats ? `${stats.totalPnl >= 0 ? "+" : ""}${fmt.usd(stats.totalPnl)}` : "—"}
+          icon={<TrendingUp size={16} />} color={stats && stats.totalPnl >= 0 ? "var(--green)" : "var(--red)"}
+          sub={stats ? `${stats.totalTrades} closed trades` : undefined} />
+        <KPICard label="Win Rate" value={stats ? `${stats.winRate.toFixed(1)}%` : "—"}
+          icon={<Trophy size={16} />} color="var(--purple)"
+          sub={stats ? `${stats.winningTrades}/${stats.totalTrades} wins` : undefined} />
         <KPICard label="LLM Spend" value={fmt.cost(stats?.totalCost ?? 0)}
-          icon={<Zap size={16} />} color="var(--yellow)" />
+          icon={<Zap size={16} />} color="var(--yellow)"
+          sub={`${stats?.totalInvocations ?? 0} invocations`} />
       </div>
+
+      {/* Open positions */}
+      {openPositions.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+          style={{ background: "var(--green)0a", border: "1px solid var(--green)33", borderRadius: 14, padding: "1rem 1.25rem" }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: "0.75rem", color: "var(--green)", display: "flex", alignItems: "center", gap: 8 }}>
+            <LiveDot color="var(--green)" /> Open Positions
+          </div>
+          <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+            {openPositions.map((p: any, i: number) => (
+              <div key={i} style={{ background: "var(--bg2)", borderRadius: 10, padding: "0.75rem 1rem", minWidth: 200 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{p.symbol ?? p.marketIndex}</span>
+                  <span style={{
+                    fontSize: 11, padding: "2px 8px", borderRadius: 4, fontWeight: 600,
+                    background: p.side === "long" ? "var(--green)22" : "var(--red)22",
+                    color: p.side === "long" ? "var(--green)" : "var(--red)",
+                  }}>{(p.side ?? "").toUpperCase()}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>Entry: {p.entryPrice ?? "—"}</div>
+                {p.unrealizedPnl && (
+                  <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4, color: parseFloat(p.unrealizedPnl) >= 0 ? "var(--green)" : "var(--red)" }}>
+                    PnL: {parseFloat(p.unrealizedPnl) >= 0 ? "+" : ""}{parseFloat(p.unrealizedPnl).toFixed(2)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
 
       {/* Main chart */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}
@@ -230,7 +283,7 @@ function OverviewTab({ snapshots, stats, invocations }: {
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="time" stroke="var(--muted2)" tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-            <YAxis stroke="var(--muted2)" tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
+            <YAxis stroke="var(--muted2)" tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
             <Tooltip content={<CustomTooltip />} />
             <Area type="monotone" dataKey="Portfolio" stroke="var(--green)" strokeWidth={2} fill="url(#gPortfolio)" dot={false} />
             <Area type="monotone" dataKey="Cash" stroke="var(--blue)" strokeWidth={1.5} fill="url(#gCash)" dot={false} strokeDasharray="4 2" />
@@ -240,7 +293,6 @@ function OverviewTab({ snapshots, stats, invocations }: {
 
       {/* Bottom row */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem" }}>
-        {/* Tool usage */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
           style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "1.25rem" }}>
           <div style={{ fontWeight: 600, fontSize: 14, marginBottom: "1rem" }}>Tool Usage</div>
@@ -259,7 +311,6 @@ function OverviewTab({ snapshots, stats, invocations }: {
           </ResponsiveContainer>
         </motion.div>
 
-        {/* Recent trades */}
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }}
           style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "1.25rem" }}>
           <div style={{ fontWeight: 600, fontSize: 14, marginBottom: "1rem" }}>Recent Actions</div>
@@ -292,6 +343,159 @@ function OverviewTab({ snapshots, stats, invocations }: {
   );
 }
 
+// ─── P&L Tab ──────────────────────────────────────────────────────────────────
+
+function PnLTab({ trades, stats }: { trades: TradeRecord[]; stats: Stats | null }) {
+  const closed = trades.filter((t) => t.status === "closed");
+  const open = trades.filter((t) => t.status === "open");
+
+  // Cumulative PnL chart
+  let cumulative = 0;
+  const cumulativeData = closed.map((t) => {
+    cumulative += t.pnl ?? 0;
+    return { time: fmt.datetime(t.closedAt ?? t.openedAt), pnl: +cumulative.toFixed(4), trade: t.pnl ?? 0 };
+  });
+
+  // Per-symbol breakdown
+  const bySymbol: Record<string, { pnl: number; wins: number; total: number }> = {};
+  for (const t of closed) {
+    if (!bySymbol[t.symbol]) bySymbol[t.symbol] = { pnl: 0, wins: 0, total: 0 };
+    bySymbol[t.symbol].pnl += t.pnl ?? 0;
+    bySymbol[t.symbol].total += 1;
+    if ((t.pnl ?? 0) > 0) bySymbol[t.symbol].wins += 1;
+  }
+  const symbolData = Object.entries(bySymbol).map(([symbol, d]) => ({
+    symbol, pnl: +d.pnl.toFixed(4), winRate: d.total > 0 ? (d.wins / d.total) * 100 : 0,
+  }));
+
+  const avgWin = closed.filter((t) => (t.pnl ?? 0) > 0).reduce((s, t) => s + (t.pnl ?? 0), 0) / Math.max(1, stats?.winningTrades ?? 1);
+  const avgLoss = closed.filter((t) => (t.pnl ?? 0) < 0).reduce((s, t) => s + (t.pnl ?? 0), 0) / Math.max(1, (stats?.totalTrades ?? 0) - (stats?.winningTrades ?? 0));
+  const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+      {/* KPI row */}
+      <div style={{ display: "flex", gap: "0.875rem", flexWrap: "wrap" }}>
+        <KPICard label="Total P&L" value={`${(stats?.totalPnl ?? 0) >= 0 ? "+" : ""}${fmt.usd(stats?.totalPnl ?? 0)}`}
+          icon={<TrendingUp size={16} />} color={(stats?.totalPnl ?? 0) >= 0 ? "var(--green)" : "var(--red)"} />
+        <KPICard label="Win Rate" value={`${(stats?.winRate ?? 0).toFixed(1)}%`}
+          icon={<Trophy size={16} />} color="var(--purple)"
+          sub={`${stats?.winningTrades ?? 0}/${stats?.totalTrades ?? 0} trades`} />
+        <KPICard label="Avg Win" value={`+${fmt.usd(avgWin)}`}
+          icon={<ArrowUpRight size={16} />} color="var(--green)" />
+        <KPICard label="Profit Factor" value={profitFactor > 0 ? profitFactor.toFixed(2) : "—"}
+          icon={<Target size={16} />} color={profitFactor >= 2 ? "var(--green)" : profitFactor >= 1 ? "var(--yellow)" : "var(--red)"}
+          sub="Avg win / avg loss" />
+      </div>
+
+      {/* Open positions */}
+      {open.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+          style={{ background: "var(--green)0a", border: "1px solid var(--green)33", borderRadius: 14, padding: "1rem 1.25rem" }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: "0.75rem", color: "var(--green)", display: "flex", alignItems: "center", gap: 8 }}>
+            <LiveDot color="var(--green)" /> Open Positions ({open.length})
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {open.map((t) => (
+              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, background: "var(--bg2)", borderRadius: 8, padding: "0.75rem 1rem" }}>
+                <span style={{ fontWeight: 700, fontSize: 14, minWidth: 40 }}>{t.symbol}</span>
+                <span style={{
+                  fontSize: 11, padding: "2px 8px", borderRadius: 4, fontWeight: 600,
+                  background: t.side === "long" ? "var(--green)22" : "var(--red)22",
+                  color: t.side === "long" ? "var(--green)" : "var(--red)",
+                }}>{t.side.toUpperCase()}</span>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>{t.quantity} @ {fmt.usd(t.entryPrice)}</span>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>{t.leverage}x</span>
+                <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: "auto" }}>{fmt.ago(t.openedAt)}</span>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      {/* Cumulative PnL chart */}
+      {cumulativeData.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}
+          style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "1.25rem" }}>
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: "1rem" }}>Cumulative P&L</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={cumulativeData}>
+              <defs>
+                <linearGradient id="gPnl" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="var(--green)" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="var(--green)" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="time" tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
+              <ReferenceLine y={0} stroke="var(--border2)" strokeDasharray="4 2" />
+              <Tooltip content={<CustomTooltip />} />
+              <Area type="monotone" dataKey="pnl" name="Cumulative P&L" stroke="var(--green)" strokeWidth={2} fill="url(#gPnl)" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </motion.div>
+      )}
+
+      {/* Per-symbol breakdown */}
+      {symbolData.length > 0 && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}
+          style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "1.25rem" }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: "1rem" }}>P&L by Symbol</div>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={symbolData} barSize={40}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="symbol" tick={{ fontSize: 12, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
+              <ReferenceLine y={0} stroke="var(--border2)" />
+              <Tooltip content={<CustomTooltip />} />
+              <Bar dataKey="pnl" name="P&L" radius={[4, 4, 0, 0]}>
+                {symbolData.map((d, i) => (
+                  <Cell key={i} fill={d.pnl >= 0 ? "var(--green)" : "var(--red)"} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </motion.div>
+      )}
+
+      {/* Trade history table */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
+        style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "1.25rem" }}>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: "1rem" }}>Trade History</div>
+        {closed.length === 0
+          ? <div style={{ color: "var(--muted)", fontSize: 12, textAlign: "center", padding: "2rem" }}>No closed trades yet</div>
+          : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {/* Header */}
+              <div style={{ display: "grid", gridTemplateColumns: "60px 60px 80px 80px 80px 80px 1fr 80px", gap: 8, padding: "0 8px", fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                <span>Symbol</span><span>Side</span><span>Entry</span><span>Exit</span><span>Qty</span><span>Lev</span><span>Reasoning</span><span style={{ textAlign: "right" }}>P&L</span>
+              </div>
+              {closed.map((t) => (
+                <div key={t.id} style={{
+                  display: "grid", gridTemplateColumns: "60px 60px 80px 80px 80px 80px 1fr 80px", gap: 8,
+                  padding: "8px", borderRadius: 8, background: "var(--bg3)", fontSize: 12, alignItems: "center",
+                }}>
+                  <span style={{ fontWeight: 700 }}>{t.symbol}</span>
+                  <span style={{ color: t.side === "long" ? "var(--green)" : "var(--red)", fontWeight: 600 }}>{t.side.toUpperCase()}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 11 }}>{fmt.usd(t.entryPrice)}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 11 }}>{t.exitPrice ? fmt.usd(t.exitPrice) : "—"}</span>
+                  <span style={{ color: "var(--muted)" }}>{t.quantity}</span>
+                  <span style={{ color: "var(--muted)" }}>{t.leverage}x</span>
+                  <span style={{ color: "var(--muted)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.reasoning ?? "—"}</span>
+                  <span style={{ textAlign: "right", fontWeight: 700, color: (t.pnl ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                    {(t.pnl ?? 0) >= 0 ? "+" : ""}{fmt.usd(t.pnl ?? 0)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )
+        }
+      </motion.div>
+    </div>
+  );
+}
+
 // ─── Trades Tab ───────────────────────────────────────────────────────────────
 
 function TradesTab({ invocations }: { invocations: Invocation[] }) {
@@ -318,7 +522,6 @@ function TradesTab({ invocations }: { invocations: Invocation[] }) {
           style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}
           whileHover={{ borderColor: "var(--border2)" }}
         >
-          {/* Header row */}
           <div
             onClick={() => setExpanded(expanded === inv.id ? null : inv.id)}
             style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer" }}
@@ -361,7 +564,6 @@ function TradesTab({ invocations }: { invocations: Invocation[] }) {
             </div>
           </div>
 
-          {/* Expanded detail */}
           <AnimatePresence>
             {expanded === inv.id && (
               <motion.div
@@ -404,7 +606,7 @@ function TradesTab({ invocations }: { invocations: Invocation[] }) {
 
 // ─── Models Tab ───────────────────────────────────────────────────────────────
 
-function ModelsTab({ models }: { models: ModelStat[]; invocations: Invocation[] }) {
+function ModelsTab({ models }: { models: ModelStat[] }) {
   const costByModel = models.map((m) => ({
     name: m.name.split(" ").slice(0, 2).join(" "),
     cost: +m.totalCost.toFixed(4),
@@ -413,7 +615,6 @@ function ModelsTab({ models }: { models: ModelStat[]; invocations: Invocation[] 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-      {/* Model cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "1rem" }}>
         {models.map((m, i) => (
           <motion.div key={m.id}
@@ -458,7 +659,6 @@ function ModelsTab({ models }: { models: ModelStat[]; invocations: Invocation[] 
         ))}
       </div>
 
-      {/* Cost comparison chart */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
         style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "1.25rem" }}>
         <div style={{ fontWeight: 600, fontSize: 14, marginBottom: "1rem" }}>Cost Comparison</div>
@@ -466,7 +666,7 @@ function ModelsTab({ models }: { models: ModelStat[]; invocations: Invocation[] 
           <BarChart data={costByModel} barSize={40}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="name" tick={{ fontSize: 11, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
+            <YAxis tick={{ fontSize: 10, fill: "var(--muted)" }} tickLine={false} axisLine={false} />
             <Tooltip content={<CustomTooltip />} />
             <Bar dataKey="cost" name="Total Cost" radius={[6, 6, 0, 0]}>
               {costByModel.map((_, i) => (
@@ -536,26 +736,32 @@ export default function App() {
   const [invocations, setInvocations] = useState<Invocation[]>([]);
   const [models, setModels] = useState<ModelStat[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [refreshing, setRefreshing] = useState(false);
 
   const refresh = useCallback(async (showSpinner = false) => {
     if (showSpinner) setRefreshing(true);
+    let anyFailed = false;
     try {
-      const [s, inv, m, st] = await Promise.allSettled([
+      const [s, inv, m, st, tr] = await Promise.allSettled([
         api.snapshots(200),
         api.invocations(100),
         api.models(),
         api.stats(),
+        api.trades(100),
       ]);
-      if (s.status === "fulfilled") setSnapshots(s.value);
-      if (inv.status === "fulfilled") setInvocations(inv.value);
-      if (m.status === "fulfilled") setModels(m.value);
-      if (st.status === "fulfilled") setStats(st.value);
+      if (s.status === "fulfilled") setSnapshots(s.value); else anyFailed = true;
+      if (inv.status === "fulfilled") setInvocations(inv.value); else anyFailed = true;
+      if (m.status === "fulfilled") setModels(m.value); else anyFailed = true;
+      if (st.status === "fulfilled") setStats(st.value); else anyFailed = true;
+      if (tr.status === "fulfilled") setTrades(tr.value); else anyFailed = true;
+      setError(anyFailed);
       setLastRefresh(new Date());
     } catch (_) {
-      // silently fail — API may not be running yet
+      setError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -567,15 +773,12 @@ export default function App() {
 
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", position: "relative" }}>
-      {/* Background */}
       <div className="grid-bg" />
       <div className="orb" style={{ width: 600, height: 600, top: -200, left: -100, background: "var(--blue)" }} />
       <div className="orb" style={{ width: 400, height: 400, bottom: -100, right: 100, background: "var(--purple)" }} />
 
-      {/* Sidebar */}
       <Sidebar active={tab} onChange={setTab} />
 
-      {/* Main content */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative", zIndex: 1 }}>
         {/* Top bar */}
         <div style={{
@@ -584,7 +787,7 @@ export default function App() {
           padding: "0 1.5rem", background: "var(--bg1)",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontWeight: 600, fontSize: 15, textTransform: "capitalize" }}>{tab}</span>
+            <span style={{ fontWeight: 600, fontSize: 15, textTransform: "capitalize" }}>{tab === "pnl" ? "P&L" : tab}</span>
             {loading && <span style={{ fontSize: 11, color: "var(--muted)" }}>Loading...</span>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -610,6 +813,7 @@ export default function App() {
 
         {/* Tab content */}
         <div style={{ flex: 1, overflow: "auto", padding: "1.5rem" }}>
+          {error && <div style={{ marginBottom: "1rem" }}><ErrorBanner onRetry={() => refresh(true)} /></div>}
           <AnimatePresence mode="wait">
             <motion.div
               key={tab}
@@ -618,18 +822,11 @@ export default function App() {
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.18 }}
             >
-              {tab === "overview" && (
-                <OverviewTab snapshots={snapshots} stats={stats} invocations={invocations} />
-              )}
-              {tab === "trades" && (
-                <TradesTab invocations={invocations} />
-              )}
-              {tab === "models" && (
-                <ModelsTab models={models} invocations={invocations} />
-              )}
-              {tab === "settings" && (
-                <SettingsTab />
-              )}
+              {tab === "overview" && <OverviewTab snapshots={snapshots} stats={stats} invocations={invocations} />}
+              {tab === "pnl"      && <PnLTab trades={trades} stats={stats} />}
+              {tab === "trades"   && <TradesTab invocations={invocations} />}
+              {tab === "models"   && <ModelsTab models={models} />}
+              {tab === "settings" && <SettingsTab />}
             </motion.div>
           </AnimatePresence>
         </div>

@@ -40,7 +40,6 @@ model ToolCall {
 
 model PortfolioSnapshot {
   id             Int      @id @default(autoincrement())
-  modelId        Int      @default(0)
   totalValue     Float
   availableCash  Float
   positions      Json
