@@ -1,13 +1,31 @@
-import { tool } from "ai";
+import { tool, jsonSchema } from "ai";
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { placeOrder, closeAllPositions, getOpenPositions, getBestPrices, type Symbol } from "../lib/lighter.ts";
 import { prisma } from "../lib/db.ts";
 import { logger } from "../lib/logger.ts";
 import { config } from "../lib/config.ts";
 
+// Bedrock Converse API requires "type":"object" at root of every tool schema.
+// The ai@6 SDK doesn't inject this automatically, so we wrap with jsonSchema().
+function bedrockTool<T extends z.ZodObject<any>>(opts: {
+  description: string;
+  parameters: T;
+  execute: (args: z.infer<T>) => Promise<any>;
+}) {
+  const schema = zodToJsonSchema(opts.parameters, { target: "openApi3" }) as any;
+  // Ensure type:object is present (Bedrock requirement)
+  if (!schema.type) schema.type = "object";
+  return tool({
+    description: opts.description,
+    parameters: jsonSchema<z.infer<T>>(schema),
+    execute: opts.execute,
+  });
+}
+
 export function buildTools(invocationId: number, modelId: number) {
   return {
-    createPosition: tool({
+    createPosition: bedrockTool({
       description: `Open a new perpetual futures position on the Lighter DEX.
 IMPORTANT: Call closeAllPositions first if any position is already open.
 Budget limit: ${config.TRADING_BUDGET_USD}. Max leverage: ${config.MAX_LEVERAGE}x.`,
@@ -56,7 +74,7 @@ Budget limit: ${config.TRADING_BUDGET_USD}. Max leverage: ${config.MAX_LEVERAGE}
       },
     }),
 
-    closeAllPositions: tool({
+    closeAllPositions: bedrockTool({
       description: "Close every open position immediately using market-equivalent limit orders.",
       parameters: z.object({
         reasoning: z.string().describe("Why positions are being closed"),
@@ -97,7 +115,7 @@ Budget limit: ${config.TRADING_BUDGET_USD}. Max leverage: ${config.MAX_LEVERAGE}
       },
     }),
 
-    getPortfolioStatus: tool({
+    getPortfolioStatus: bedrockTool({
       description: "Get current portfolio status including open positions and balances.",
       parameters: z.object({
         reason: z.string().optional().describe("Why you are checking portfolio status"),
