@@ -106,7 +106,7 @@ export function buildUserPrompt(
 ### ${symbol} — $${ind.lastClose.toFixed(2)} (${ind.priceChange24h >= 0 ? "+" : ""}${ind.priceChange24h.toFixed(2)}% period)${syntheticWarning}
 Trend: ${ind.trend.toUpperCase()} | ${signalSummary}
 EMA:   9=${ind.ema9.toFixed(2)}  21=${ind.ema21.toFixed(2)}  50=${ind.ema50.toFixed(2)}
-MACD:  ${ind.macd.toFixed(4)} | Signal: ${ind.macdSignal.toFixed(4)} | Hist: ${ind.macdHistogram.toFixed(4)}
+MACD:  ${Number(ind.macd).toFixed(4)} | Signal: ${Number(ind.macdSignal).toFixed(4)} | Hist: ${Number(ind.macdHistogram).toFixed(4)}
 RSI14: ${ind.rsi14.toFixed(1)} ${ind.rsi14 > 75 ? "⚠️ OVERBOUGHT" : ind.rsi14 < 25 ? "⚠️ OVERSOLD" : "✅ NEUTRAL"}
 BB:    Upper=${ind.bbUpper.toFixed(2)}  Mid=${ind.bbMiddle.toFixed(2)}  Lower=${ind.bbLower.toFixed(2)}  Width=${((ind.bbUpper - ind.bbLower) / ind.bbMiddle * 100).toFixed(2)}%
 Vol:   ${vol24h} (period total)
