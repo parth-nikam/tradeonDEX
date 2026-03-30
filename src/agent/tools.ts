@@ -99,7 +99,9 @@ Budget limit: ${config.TRADING_BUDGET_USD}. Max leverage: ${config.MAX_LEVERAGE}
 
     getPortfolioStatus: tool({
       description: "Get current portfolio status including open positions and balances.",
-      parameters: z.object({}),
+      parameters: z.object({
+        reason: z.string().optional().describe("Why you are checking portfolio status"),
+      }),
       execute: async () => {
         const positions = await getOpenPositions();
         const result = {
